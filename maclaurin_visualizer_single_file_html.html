@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Maclaurin Series Visualizer (Single HTML)</title>
+  <!-- Tailwind (CDN) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    html, body { height: 100%; }
+  </style>
+</head>
+<body class="min-h-screen bg-slate-50 text-slate-900">
+  <div class="max-w-6xl mx-auto p-4 md:p-6">
+    <header class="flex items-baseline justify-between mb-4">
+      <h1 class="text-2xl md:text-3xl font-bold">Maclaurin Series Visualizer</h1>
+      <div class="text-sm text-slate-600">f(0) に中心を置いたテイラー多項式 P<sub>n</sub>(x) の近似</div>
+    </header>
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <!-- Controls -->
+      <section class="lg:col-span-1 bg-white rounded-2xl shadow p-4 space-y-4">
+        <div>
+          <label class="block text-sm font-medium mb-1">関数</label>
+          <select id="func-key" class="w-full rounded-xl border border-slate-300 p-2">
+            <option value="exp">e^x</option>
+            <option value="sin">sin x</option>
+            <option value="cos">cos x</option>
+            <option value="ln1p">ln(1+x)</option>
+            <option value="geom">1/(1-x)</option>
+            <option value="atan">arctan x</option>
+          </select>
+          <p id="series-hint" class="text-xs mt-1 text-slate-600"></p>
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium">次数 n = <span id="n-label" class="font-semibold">0</span></label>
+          <input id="n-range" type="range" min="0" max="40" value="0" class="w-full" />
+          <div class="flex gap-2 mt-2">
+            <button id="auto-btn" class="px-3 py-1 rounded-xl text-sm bg-slate-200">自動で次数を上げる</button>
+            <button id="reset-btn" class="px-3 py-1 rounded-xl text-sm bg-slate-100 border">リセット</button>
+          </div>
+          <div class="mt-2">
+            <label class="text-xs">スピード: <span id="speed-label">400</span> ms</label>
+            <input id="speed-range" type="range" min="80" max="1000" step="20" value="400" class="w-full" />
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block text-sm font-medium">x 最小</label>
+            <input id="min-x" type="number" class="w-full rounded-xl border border-slate-300 p-2" />
+          </div>
+          <div>
+            <label class="block text-sm font-medium">x 最大</label>
+            <input id="max-x" type="number" class="w-full rounded-xl border border-slate-300 p-2" />
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2 items-center">
+          <label class="flex items-center gap-2 text-sm">
+            <input id="shade-roc" type="checkbox" checked />収束半径を表示
+          </label>
+          <label class="flex items-center gap-2 text-sm">
+            <input id="show-error" type="checkbox" />誤差グラフ
+          </label>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2 items-center">
+          <label class="flex items-center gap-2 text-sm">
+            <input id="show-axes" type="checkbox" checked />x=0 と y=0 の軸を表示
+          </label>
+          <label class="flex items-center gap-2 text-sm">
+            <input id="sym-y" type="checkbox" />y 範囲を ±同幅に固定
+          </label>
+        </div>
+
+        <div class="text-xs text-slate-600 bg-slate-50 rounded-xl p-3">
+          <div><span class="font-medium">関数:</span> <span id="func-label"></span></div>
+          <div><span class="font-medium">P<sub>n</sub>(x):</span> f の 0 まわりのマクローリン多項式（次数 ≤ n）</div>
+          <div><span class="font-medium">収束半径:</span> <span id="roc-label"></span></div>
+          <div id="domain-note"></div>
+        </div>
+
+        <details id="test-panel" class="bg-white rounded-2xl shadow p-3 text-sm">
+          <summary class="cursor-pointer select-none">自己テスト</summary>
+          <ul id="test-list" class="mt-2 list-disc pl-5 space-y-1"></ul>
+        </details>
+      </section>
+
+      <!-- Charts -->
+      <section class="lg:col-span-2 bg-white rounded-2xl shadow p-4">
+        <div class="mb-2 flex items-center justify-between">
+          <h2 class="font-semibold">グラフ</h2>
+          <div class="text-xs text-slate-600">実線: f(x), 破線: P<sub>n</sub>(x)</div>
+        </div>
+        <div class="h-80">
+          <canvas id="main-chart"></canvas>
+        </div>
+
+        <div id="error-wrap" class="mt-6 hidden">
+          <div class="mb-1 text-sm text-slate-600">誤差（P<sub>n</sub>(x) − f(x)）</div>
+          <div class="h-56">
+            <canvas id="err-chart"></canvas>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <footer class="mt-6 text-xs text-slate-500">操作のヒント: 収束半径の薄い部分はマクローリン級数の収束範囲外です（多項式は描画されますが、近似は悪化します）。</footer>
+  </div>
+
+  <script>
+    // ---------- math helpers ----------
+    const MAX_N = 40;
+    const FACT_LIMIT = 60;
+    const factorials = (() => {
+      const f = new Array(FACT_LIMIT + 1).fill(1);
+      for (let i = 2; i <= FACT_LIMIT; i++) f[i] = f[i - 1] * i;
+      return f;
+    })();
+    const powInt = (x, k) => Math.pow(x, k);
+
+    function seriesApprox(key, x, n) {
+      switch (key) {
+        case 'exp': {
+          let s = 0; const upto = Math.min(n, FACT_LIMIT);
+          for (let k = 0; k <= upto; k++) s += powInt(x, k) / factorials[k];
+          return s;
+        }
+        case 'sin': {
+          let s = 0; const K = Math.floor((n - 1) / 2);
+          for (let k = 0; k <= K; k++) s += (k % 2 === 0 ? 1 : -1) * powInt(x, 2*k+1) / factorials[2*k+1];
+          return s;
+        }
+        case 'cos': {
+          let s = 0; const K = Math.floor(n / 2);
+          for (let k = 0; k <= K; k++) s += (k % 2 === 0 ? 1 : -1) * powInt(x, 2*k) / factorials[2*k];
+          return s;
+        }
+        case 'ln1p': {
+          if (n === 0) return 0; let s = 0;
+          for (let k = 1; k <= n; k++) s += (k % 2 === 1 ? 1 : -1) * powInt(x, k) / k;
+          return s;
+        }
+        case 'geom': {
+          let s = 0, term = 1; // x^0
+          for (let k = 0; k <= n; k++) { s += term; term *= x; }
+          return s;
+        }
+        case 'atan': {
+          let s = 0;
+          for (let k = 0; k <= n; k++) s += (k % 2 === 0 ? 1 : -1) * powInt(x, 2*k+1) / (2*k+1);
+          return s;
+        }
+        default: return NaN;
+      }
+    }
+
+    function exactValue(key, x) {
+      switch (key) {
+        case 'exp': return Math.exp(x);
+        case 'sin': return Math.sin(x);
+        case 'cos': return Math.cos(x);
+        case 'ln1p': return x > -1 ? (Math.log1p ? Math.log1p(x) : Math.log(1 + x)) : null;
+        case 'geom': return x === 1 ? null : 1 / (1 - x);
+        case 'atan': return Math.atan(x);
+        default: return null;
+      }
+    }
+
+    function radiusOfConvergence(key) {
+      switch (key) {
+        case 'ln1p':
+        case 'atan':
+        case 'geom': return 1;
+        default: return 'infinite';
+      }
+    }
+
+    function defaultDomain(key) {
+      switch (key) {
+        case 'ln1p': return [-0.95, 2.5];
+        case 'geom': return [-0.95, 0.95];
+        case 'atan': return [-1.3, 1.3];
+        case 'sin': return [-7.5, 7.5];
+        case 'cos': return [-7.5, 7.5];
+        case 'exp':
+        default: return [-3, 3];
+      }
+    }
+
+    function functionLabel(key) {
+      return ({ exp: 'e^x', sin: 'sin x', cos: 'cos x', ln1p: 'ln(1+x)', geom: '1/(1-x)', atan: 'arctan x' })[key];
+    }
+
+    function seriesHint(key) {
+      switch (key) {
+        case 'exp': return '1 + x + x^2/2! + x^3/3! + …';
+        case 'sin': return 'x − x^3/3! + x^5/5! − …';
+        case 'cos': return '1 − x^2/2! + x^4/4! − …';
+        case 'ln1p': return 'x − x^2/2 + x^3/3 − x^4/4 + … (|x|<1)';
+        case 'geom': return '1 + x + x^2 + x^3 + … (|x|<1)';
+        case 'atan': return 'x − x^3/3 + x^5/5 − x^7/7 + … (|x|≤1)';
+        default: return '';
+      }
+    }
+
+    function generateData(key, n, minX, maxX, points) {
+      const data = []; const step = (maxX - minX) / (points - 1);
+      for (let i = 0; i < points; i++) {
+        const x = minX + i * step;
+        const fx = exactValue(key, x);
+        const pn = seriesApprox(key, x, n);
+        const err = fx == null || !isFinite(fx) ? null : pn - fx;
+        data.push({ x, fx: fx == null || !isFinite(fx) ? null : fx, pn, err });
+      }
+      return data;
+    }
+
+    // ---------- tests ----------
+    const approxEqual = (a, b, tol) => Math.abs(a - b) <= tol;
+    function runSelfTests() {
+      const cases = [];
+      { const approx = seriesApprox('exp', 1, 12); const exact = Math.E; cases.push(['exp(1)', approxEqual(approx, exact, 1e-6), approx, exact]); }
+      { const approx = seriesApprox('sin', 2, 15); const exact = Math.sin(2); cases.push(['sin(2)', approxEqual(approx, exact, 1e-6), approx, exact]); }
+      { const approx = seriesApprox('cos', -1, 14); const exact = Math.cos(-1); cases.push(['cos(-1)', approxEqual(approx, exact, 1e-6), approx, exact]); }
+      { const x = 0.5; const approx = seriesApprox('ln1p', x, 30); const exact = Math.log1p ? Math.log1p(x) : Math.log(1+x); cases.push(['ln(1+0.5)', approxEqual(approx, exact, 1e-9), approx, exact]); }
+      { const x = 0.5; const approx = seriesApprox('geom', x, 40); const exact = 1/(1-x); cases.push(['1/(1-0.5)', approxEqual(approx, exact, 1e-9), approx, exact]); }
+      { const approx = seriesApprox('atan', 1, 120); const exact = Math.PI/4; cases.push(['atan(1)', approxEqual(approx, exact, 5e-4), approx, exact]); }
+      return cases;
+    }
+
+    // ---------- UI state ----------
+    const els = {
+      funcKey: document.getElementById('func-key'),
+      seriesHint: document.getElementById('series-hint'),
+      n: document.getElementById('n-range'),
+      nLabel: document.getElementById('n-label'),
+      autoBtn: document.getElementById('auto-btn'),
+      resetBtn: document.getElementById('reset-btn'),
+      speed: document.getElementById('speed-range'),
+      speedLabel: document.getElementById('speed-label'),
+      minX: document.getElementById('min-x'),
+      maxX: document.getElementById('max-x'),
+      shadeROC: document.getElementById('shade-roc'),
+      showError: document.getElementById('show-error'),
+      errorWrap: document.getElementById('error-wrap'),
+      showAxes: document.getElementById('show-axes'),
+      symY: document.getElementById('sym-y'),
+      funcLabel: document.getElementById('func-label'),
+      rocLabel: document.getElementById('roc-label'),
+      domainNote: document.getElementById('domain-note'),
+      testPanel: document.getElementById('test-panel'),
+      testList: document.getElementById('test-list'),
+    };
+
+    let auto = false; let autoTimer = null; const points = 601;
+
+    function setAuto(on) {
+      auto = on;
+      els.autoBtn.textContent = on ? '一時停止' : '自動で次数を上げる';
+      els.autoBtn.className = on ? 'px-3 py-1 rounded-xl text-sm bg-slate-900 text-white' : 'px-3 py-1 rounded-xl text-sm bg-slate-200';
+      if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
+      if (on) {
+        autoTimer = setInterval(() => {
+          const v = parseInt(els.n.value, 10);
+          els.n.value = v >= MAX_N ? 0 : v + 1;
+          els.n.dispatchEvent(new Event('input'));
+        }, parseInt(els.speed.value, 10));
+      }
+    }
+
+    // ---------- Chart.js plugins ----------
+    const axesPlugin = {
+      id: 'axesLines',
+      afterDraw(chart, args, opts) {
+        if (!opts || !(opts.showX || opts.showY)) return;
+        const { ctx, chartArea: { left, right, top, bottom }, scales: { x, y } } = chart;
+        ctx.save(); ctx.strokeStyle = '#475569'; ctx.setLineDash([4,4]);
+        if (opts.showX) { const y0 = y.getPixelForValue(0); ctx.beginPath(); ctx.moveTo(left, y0); ctx.lineTo(right, y0); ctx.stroke(); }
+        if (opts.showY) { const x0 = x.getPixelForValue(0); ctx.beginPath(); ctx.moveTo(x0, top); ctx.lineTo(x0, bottom); ctx.stroke(); }
+        ctx.restore();
+      }
+    };
+
+    const rocPlugin = {
+      id: 'rocShade',
+      beforeDraw(chart, args, opts) {
+        if (!opts || !opts.enabled || opts.roc == null || opts.roc === 'infinite') return;
+        const roc = opts.roc; const { ctx, chartArea: { left, right, top, bottom }, scales: { x } } = chart;
+        ctx.save(); ctx.fillStyle = 'rgba(148,163,184,0.25)'; // slate-400 @ 25%
+        const min = x.min, max = x.max;
+        if (min < -roc) { const x1 = x.getPixelForValue(min), x2 = x.getPixelForValue(-roc); ctx.fillRect(x1, top, x2 - x1, bottom - top); }
+        if (max > roc)  { const x1 = x.getPixelForValue( roc), x2 = x.getPixelForValue( max); ctx.fillRect(x1, top, x2 - x1, bottom - top); }
+        ctx.restore();
+      }
+    };
+
+    Chart.register(axesPlugin, rocPlugin);
+
+    // ---------- Charts setup ----------
+    const mainCtx = document.getElementById('main-chart').getContext('2d');
+    const errCtx  = document.getElementById('err-chart').getContext('2d');
+
+    const tooltipFmt = (v) => typeof v === 'number' ? Number(v).toPrecision(6) : v;
+
+    const mainChart = new Chart(mainCtx, {
+      type: 'line',
+      data: { datasets: [] },
+      options: {
+        animation: false,
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          x: { type: 'linear', min: -3, max: 3, ticks: { maxTicksLimit: 11 } },
+          y: { ticks: { maxTicksLimit: 9 } }
+        },
+        plugins: {
+          legend: { display: true },
+          tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: (${tooltipFmt(ctx.parsed.x)}, ${tooltipFmt(ctx.parsed.y)})` } },
+          axesLines: { showX: true, showY: true },
+          rocShade: { enabled: true, roc: null }
+        },
+        elements: { point: { radius: 0 } }
+      }
+    });
+
+    const errChart = new Chart(errCtx, {
+      type: 'line',
+      data: { datasets: [] },
+      options: {
+        animation: false,
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          x: { type: 'linear', ticks: { maxTicksLimit: 11 } },
+          y: { ticks: { maxTicksLimit: 7 } }
+        },
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: (ctx) => `${tooltipFmt(ctx.parsed.x)}, ${tooltipFmt(ctx.parsed.y)}` } },
+          axesLines: { showX: true, showY: false }
+        },
+        elements: { point: { radius: 0 } }
+      }
+    });
+
+    function updateCharts() {
+      const key = els.funcKey.value; const n = parseInt(els.n.value, 10);
+      const minX = parseFloat(els.minX.value); const maxX = parseFloat(els.maxX.value);
+
+      const data = generateData(key, n, minX, maxX, points);
+      const fx = data.map(d => ({ x: d.x, y: d.fx }));
+      const pn = data.map(d => ({ x: d.x, y: d.pn }));
+      const err = data.map(d => ({ x: d.x, y: d.err }));
+
+      // symmetric y-domain for sin/cos option
+      let yMin = undefined, yMax = undefined;
+      if (els.symY.checked) {
+        let maxAbs = 1;
+        for (const d of data) { if (d.fx != null && isFinite(d.fx)) maxAbs = Math.max(maxAbs, Math.abs(d.fx)); maxAbs = Math.max(maxAbs, Math.abs(d.pn)); }
+        const m = Math.min(10, maxAbs + 0.2); yMin = -m; yMax = m;
+      }
+
+      // main chart config
+      mainChart.options.scales.x.min = minX; mainChart.options.scales.x.max = maxX;
+      mainChart.options.scales.y.min = yMin; mainChart.options.scales.y.max = yMax;
+      mainChart.options.plugins.axesLines.showX = els.showAxes.checked; mainChart.options.plugins.axesLines.showY = els.showAxes.checked;
+      const roc = radiusOfConvergence(key); mainChart.options.plugins.rocShade.enabled = els.shadeROC.checked; mainChart.options.plugins.rocShade.roc = roc;
+
+      mainChart.data.datasets = [
+        { label: 'f(x)', data: fx, borderWidth: 2, tension: 0, borderColor: '#0f172a', spanGaps: true },
+        { label: `P_${n}(x)`, data: pn, borderWidth: 2, tension: 0, borderColor: '#475569', borderDash: [6,4] }
+      ];
+      mainChart.update();
+
+      // error chart
+      if (els.showError.checked) {
+        els.errorWrap.classList.remove('hidden');
+        errChart.options.scales.x.min = minX; errChart.options.scales.x.max = maxX;
+        errChart.data.datasets = [ { label: 'err', data: err, borderWidth: 2, tension: 0, borderColor: '#0f172a' } ];
+        errChart.update();
+      } else {
+        els.errorWrap.classList.add('hidden');
+      }
+
+      // side info
+      els.nLabel.textContent = n;
+      els.funcLabel.textContent = `f(x) = ${functionLabel(key)}`;
+      const rocText = (radiusOfConvergence(key) === 'infinite') ? '∞ (全領域)' : `|x| < ${radiusOfConvergence(key)}`;
+      els.rocLabel.textContent = rocText;
+      els.seriesHint.textContent = `級数: ${seriesHint(key)}`;
+      els.domainNote.innerHTML = (key === 'ln1p') ? '定義域: x &gt; -1（x ≤ -1 では f(x) が定義されません）' : (key === 'geom') ? '定義域: x ≠ 1（x = 1 で特異点）' : '';
+    }
+
+    function resetDomainForKey(key) {
+      const [dmin, dmax] = defaultDomain(key);
+      els.minX.value = dmin; els.maxX.value = dmax;
+    }
+
+    // -------- init --------
+    function init() {
+      // set defaults
+      resetDomainForKey('exp');
+      els.seriesHint.textContent = `級数: ${seriesHint('exp')}`;
+      els.funcLabel.textContent = `f(x) = ${functionLabel('exp')}`;
+      els.rocLabel.textContent = '∞ (全領域)';
+
+      // tests
+      const cases = runSelfTests();
+      const allPass = cases.every(c => c[1]);
+      els.testList.innerHTML = cases.map(([name, pass, approx, exact]) => `<li class="${pass ? 'text-green-700' : 'text-red-700'}">${name}: ${pass ? 'OK' : 'NG'} <span class="text-slate-500">(approx=${approx}, exact=${exact})</span></li>`).join('');
+      if (allPass) els.testPanel.open = false; else els.testPanel.open = true;
+
+      // listeners
+      els.funcKey.addEventListener('change', () => { resetDomainForKey(els.funcKey.value); els.symY.checked = (els.funcKey.value === 'sin' || els.funcKey.value === 'cos'); updateCharts(); });
+      els.n.addEventListener('input', updateCharts);
+      els.speed.addEventListener('input', () => { els.speedLabel.textContent = els.speed.value; if (auto) setAuto(true); });
+      els.minX.addEventListener('input', updateCharts);
+      els.maxX.addEventListener('input', updateCharts);
+      els.shadeROC.addEventListener('change', updateCharts);
+      els.showAxes.addEventListener('change', updateCharts);
+      els.symY.addEventListener('change', updateCharts);
+      els.showError.addEventListener('change', updateCharts);
+      els.resetBtn.addEventListener('click', () => { els.n.value = 0; updateCharts(); });
+      els.autoBtn.addEventListener('click', () => setAuto(!auto));
+
+      updateCharts();
+    }
+
+    init();
+  </script>
+</body>
+</html>
